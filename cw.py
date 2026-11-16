@@ -28,6 +28,8 @@ def dataset_setup(csv_path):
 
     return x, y
 
+
+
 class MLP:
     def __init__(self, n_inputs: int, n_outputs: int):
         self.n_inputs = n_inputs
@@ -35,6 +37,8 @@ class MLP:
         self.hl_nodes = [] #Contains a list of the number of nodes in each hidden layer
         self.weights = [] 
         self.biases = []
+        self.weighted_sums = [] #populated in prediction func, for use in backprop
+        self.activations = [] #populated in prediction func, for use in backprop
 
     #Creates hidden layer between inputs and outputs
     #Each subsequent call adds another hidden layer in between the previously created hidden layer and output layer
@@ -71,10 +75,58 @@ class MLP:
         print(f"Weights list: {self.weights}")
         print(f"Number of outputs: {self.n_outputs}")
 
-    def prediction():
-        pass
+    def prediction(self, x, activation_funcs):
+        for weights, biases, activation in zip(self.weights, self.biases, activation_funcs):
+            self.weighted_sums.append(np.dot(x, weights)+biases) #Need each layer's weighted sum for backprop
+            
+            x = activation(np.dot(x, weights) + biases)
 
+            self.activations.append(x) #Need each layer's activation func output for backprop
 
+        return x
+
+    def baseline_backpropogate(self, input, prediction, ground_truth, n_samples, learning_rate): #Backpropagation func for set single hidden layer
+        #2nd layer of dvs
+        dl_dws2 = (prediction - ground_truth) * MLP.sigmoid_dv(self.weighted_sums[1]) #The derivative of the loss with respect to the second weighted sum (the final ws)
+        dl_dw2 = np.dot(self.activations[0].T,dl_dws2)/n_samples #...
+        dl_db2 = np.sum(dl_dws2, axis=0, keepdims=True)/n_samples
+        #1st layer of dvs
+        dl_da1 = np.dot(dl_dws2,self.weights[1].T)
+        dl_dws1 = dl_da1 * MLP.relu_dv(self.weighted_sums[0])
+        dl_dw1 = np.dot(input.T,dl_dws1) / n_samples
+        dl_db1 = np.sum(dl_dws1, axis=0, keepdims=True)/n_samples
+        #Update weights
+        self.biases[0] -= learning_rate * dl_db1
+        self.weights[0] -= learning_rate * dl_dw1
+        self.biases[1] -= learning_rate * dl_db2
+        self.weights[1] -= learning_rate * dl_dw2
+
+    @staticmethod
+    def loss(ground_truth, prediction): #MSE
+        return np.mean((ground_truth - prediction) ** 2)
+        
+    #Activation funcs
+    @staticmethod
+    def relu(x):
+        return np.maximum(0, x)
+    @staticmethod
+    def relu_dv(x):
+        return np.where(x>0, 1, 0)
+    @staticmethod
+    def sigmoid(x):
+        return 1 / (1 + np.exp(-x))
+    @staticmethod
+    def sigmoid_dv(x):
+        s = MLP.sigmoid(x)
+        return s * (1 - s)
+    
+#Size of input values caused predictions blow up in sigmoid
+#Sample prediction before standardization: [1.         1.         0.99999995 1.         1.        ]
+def standardization(input_data): #z-score normalization
+    mean = np.mean(input_data, axis=0)
+    std = np.std(input_data, axis=0)
+
+    return (input_data - mean)/std
 
 def main():
     x, y = dataset_setup("covtype-10.csv")
@@ -82,16 +134,18 @@ def main():
     #train and test data split
     x_train, x_test, y_train, y_test = skms.train_test_split(x, y, test_size=0.2)
 
-    test_mlp = MLP(3, 1)
-    print("Just inputs and outputs")
-    test_mlp.print_mlp()
-    print("Now w/ hidden layer")
-    test_mlp.add_hidden_layer(2)
-    test_mlp.print_mlp()
-    print("Adding another hidden layer")
-    test_mlp.add_hidden_layer(2)
-    test_mlp.print_mlp()
+    x_train = standardization(x_train)
+    x_test = standardization(x_test)
 
+    baseline_mlp = MLP(10, 5)
+    baseline_mlp.add_hidden_layer(2)
+    baseline_mlp.print_mlp()
+
+    prediction = baseline_mlp.prediction(x_train, [MLP.relu, MLP.sigmoid])
+    print(f"Shape of prediction: {prediction.shape}")
+    print(prediction)
+
+    #Note: Make sure to clear weighted_sums and activations lists from the MLP object after backprop finishes
 
 if __name__ == "__main__":
     main()
