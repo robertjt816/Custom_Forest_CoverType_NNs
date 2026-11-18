@@ -20,8 +20,6 @@ def dataset_setup(csv_path):
         rng_sample = same_class_df.sample(n=2500, random_state=rng)
         cov_type_df = pd.concat([cov_type_df, rng_sample])
 
-    cov_type_df = cov_type_df.reset_index(drop=True) #fixes indices
-
     #Splits dfs into inputs (x) and ground truths (y)
     x = cov_type_df.drop(columns=["Cover_Type"])
     y = cov_type_df["Cover_Type"]
@@ -46,7 +44,7 @@ class MLP:
         
         #Creates input biases and weights if no other hidden layers exist yet
         if not self.hl_nodes:
-            input_biases = np.zeros(n_nodes)
+            input_biases = np.zeros((1, n_nodes))
             input_weights = rng.standard_normal((self.n_inputs, n_nodes)) * 0.1
 
             #This in only done for the first layer, 
@@ -56,11 +54,11 @@ class MLP:
         else:
             #If a hidden layer already exists...
             #Overwrite the previous hidden layer's output weights (this layer's input weights) and output biases (this layer's input biases)
-            self.biases[-1] = np.zeros(n_nodes)
+            self.biases[-1] = np.zeros((1, n_nodes))
             self.weights[-1] = rng.standard_normal((self.hl_nodes[-1], n_nodes)) * 0.1
 
         #Creates output weights and biases (may be overwritten if another layer is added)
-        output_biases = np.zeros(self.n_outputs)
+        output_biases = np.zeros((1, self.n_outputs))
         output_weights = rng.standard_normal((n_nodes, self.n_outputs)) * 0.1
 
         #Appends new nodes, biases, and weights to the MLP object's lists
@@ -83,7 +81,17 @@ class MLP:
 
             self.activations.append(x) #Need each layer's activation func output for backprop
 
-        return x
+        return x, np.argmax(x, axis=1) #Outputs list of all 5 classes final activation output and the list of the indices of the highest value outputs (the class prediction)
+
+    #x format:
+    # [[1. 0. 0. 0. 0.]
+    # [0. 1. 0. 0. 0.]
+    # [0. 0. 1. 0. 0.]
+    # [0. 0. 0. 1. 0.]
+    # [0. 0. 0. 0. 1.]]
+    #np.argmax(x, axis=1) format:
+    # [4 4 4 0 4]
+    
 
     def baseline_backpropogate(self, input, prediction, ground_truth, n_samples, learning_rate): #Backpropagation func for set single hidden layer
         #2nd layer of dvs
@@ -101,9 +109,22 @@ class MLP:
         self.biases[1] -= learning_rate * dl_db2
         self.weights[1] -= learning_rate * dl_dw2
 
+        self.weighted_sums.clear() #Clear weighted_sums list for next prediction cycle to populate it
+        self.activations.clear() #Clear activations list for next prediction cycle to populate it
+
     @staticmethod
-    def loss(ground_truth, prediction): #MSE
-        return np.mean((ground_truth - prediction) ** 2)
+    def loss(ground_truth, prediction): #Using MSE
+        return np.mean((ground_truth - prediction) ** 2) #Averages across each samples' row and then across all samples
+
+    @staticmethod
+    def accuracy(ground_truth, predicted_classes):
+        correct_count = 0
+        for gt_val, predicted_class in zip(ground_truth, predicted_classes):
+            if gt_val == predicted_class:
+                correct_count += 1
+        return correct_count/len(ground_truth)
+
+    
         
     #Activation funcs
     @staticmethod
@@ -128,22 +149,45 @@ def standardization(input_data): #z-score normalization
 
     return (input_data - mean)/std
 
+#Fitting 1d ground truth list to the 5 node output of the baseline MLP
+# +Converts ground truth list to values 0-4 instead of random 5 from 1-7
+def y_shaping(y, n_outputs):
+    classes = np.unique(y) #Returns list of possible classes ([3, 4, 5, 6, 7] for this seed)
+    adjusted_indices = np.searchsorted(classes, y) #Converts y's gt classes to 0-4 instead of random 5 from 1-7
+    gt = np.zeros((len(y), n_outputs))
+    row_indices = np.arange(len(y)) #Creates a list from 0 to y
+    gt[row_indices, adjusted_indices] = 1
+    return gt, adjusted_indices #First return val: formatted for MLP, Second return val: formatted for accuracy measure
+
 def main():
     x, y = dataset_setup("covtype-10.csv")
     
     #train and test data split
-    x_train, x_test, y_train, y_test = skms.train_test_split(x, y, test_size=0.2)
+    x_train, x_test, y_train, y_test = skms.train_test_split(x, y, test_size=0.2, shuffle=False)
+
+    y_train, y_train_indices_updated = y_shaping(y_train, 5)
+    y_test, y_test_indices_updated= y_shaping(y_test, 5)
 
     x_train = standardization(x_train)
     x_test = standardization(x_test)
 
     baseline_mlp = MLP(10, 5)
     baseline_mlp.add_hidden_layer(2)
-    baseline_mlp.print_mlp()
 
-    prediction = baseline_mlp.prediction(x_train, [MLP.relu, MLP.sigmoid])
-    print(f"Shape of prediction: {prediction.shape}")
-    print(prediction)
+
+    for i in range(5000):
+        prediction, predicted_classes = baseline_mlp.prediction(x_train, [MLP.relu, MLP.sigmoid])
+        if i % 100 == 0:
+            print(f"loss: {MLP.loss(y_train, prediction)}")
+            print(f"accuracy: {MLP.accuracy(y_train_indices_updated, predicted_classes)}")
+        baseline_mlp.baseline_backpropogate(x_train, prediction, y_train, len(x_train), 0.1)
+    
+    
+
+
+    
+
+
 
     #Note: Make sure to clear weighted_sums and activations lists from the MLP object after backprop finishes
 
